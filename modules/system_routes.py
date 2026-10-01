@@ -1786,6 +1786,7 @@ def register_routes(app):
                 "error": scan_st["last_error"],
                 "errors": scan_st["errors"],
                 "interval_sec": scan_st["interval_sec"],
+                "scan_enabled": scan_st["scan_enabled"],
                 "thread_alive": scan_st["thread_alive"],
             },
             "db": db_status,

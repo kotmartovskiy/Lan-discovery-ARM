@@ -48,6 +48,20 @@ def _scan_interval():
     return int(_cfg_net("scan_interval", 30) or 30)
 
 
+def _scan_enabled():
+    """Фоновый скан включён? (PHASE 16 №59 — одна ведущая копия).
+
+    `network.scan_enabled: false` → scan_loop спит и не опрашивает
+    сеть (нужно, когда одну подсеть ведёт другая панель, например OP
+    на 1.0 отдаёт лидерство X96). Ручной POST /api/scan и статус
+    при этом остаются доступными.
+    """
+    v = _cfg_net("scan_enabled", True)
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _max_misses():
     return int(_cfg_net("max_misses", 6) or 6)
 
@@ -180,6 +194,7 @@ def get_scan_status():
     """Статус скан-потока для /api/health (P1-9)."""
     st = dict(_scan_status)
     st["interval_sec"] = _scan_interval()
+    st["scan_enabled"] = _scan_enabled()
     st["thread_alive"] = bool(_scan_thread and _scan_thread.is_alive())
     return st
 
@@ -297,6 +312,10 @@ def reconcile(con, current_devices, now=None):
 
 def scan_loop():
     while True:
+        if not _scan_enabled():
+            # PHASE 16 №59: ведёт другая копия — просто ждём, сеть не трогаем
+            time.sleep(_scan_interval())
+            continue
         con = None
         try:
             output = run_scan()

@@ -224,11 +224,24 @@ def test_reconcile_no_change_keeps_mac(monkeypatch, devices_db, no_dns):
 
 def test_get_scan_status_shape(monkeypatch):
     monkeypatch.setattr(d, "_scan_interval", lambda: 30)
+    monkeypatch.setattr(d, "_scan_enabled", lambda: True)
     st = d.get_scan_status()
     assert st["interval_sec"] == 30
+    assert st["scan_enabled"] is True
     assert isinstance(st["thread_alive"], bool)
     assert set(st) == {"last_scan", "last_ok", "last_error", "errors",
-                       "interval_sec", "thread_alive"}
+                       "interval_sec", "scan_enabled", "thread_alive"}
+
+
+def test_scan_enabled_flag(monkeypatch):
+    """PHASE 16 №59: network.scan_enabled (default true, bool/строки)."""
+    monkeypatch.setattr(d, "_cfg_net", lambda k, dv=None: dv)
+    assert d._scan_enabled() is True
+    for val, want in ((False, False), (True, True),
+                      ("false", False), ("0", False), ("no", False),
+                      ("true", True), ("1", True), ("on", True)):
+        monkeypatch.setattr(d, "_cfg_net", lambda k, dv=None, v=val: v)
+        assert d._scan_enabled() is want, val
 
 
 def test_start_scan_thread_guard(monkeypatch):
