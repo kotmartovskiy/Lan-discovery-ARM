@@ -481,6 +481,7 @@ def register_routes(app):
 
     @app.route("/api/settings")
     @login_required
+    @admin_required
     def api_settings_get():
         return jsonify(load_settings())
 
