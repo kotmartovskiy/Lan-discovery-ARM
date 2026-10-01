@@ -5,6 +5,14 @@
 - **Панель:** `http://<ip>:8080` (Flask, Python 3, venv)
 - **Сервис:** `systemctl status lan-discovery`, код — `/opt/lan-discovery/app.py`
 
+
+## Лицензия
+
+**Проприетарная** — см. [LICENSE](LICENSE). Личное некоммерческое
+использование свободно; коммерческое использование, распространение
+и публичные копии кода — только по письменному разрешению
+правообладателя (kotmartovskiy).
+
 ## Документация
 
 Полные инструкции — в [`docs/`](docs/) (они же — [wiki](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki)):
