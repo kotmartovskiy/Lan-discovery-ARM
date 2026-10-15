@@ -196,6 +196,15 @@ def write_to_disk(n, stream, total):
     written = 0
     t0 = time.time()
     pending = b""
+    # Двухпроходный MBR: Windows (volmgr) при появлении разделов в записываемом
+    # MBR примонтировывает их и блокирует дальнейшую сырую запись (WinError 5).
+    # Пишем образ с нулевым MBR, реальный MBR — последним (уже после записи).
+    mbr = b""
+    while len(mbr) < 512:
+        piece = stream.read(512 - len(mbr))
+        if not piece:
+            die("образ короче 512 байт")
+        mbr += piece
     try:
         while True:
             data = stream.read(BUF)
@@ -214,6 +223,8 @@ def write_to_disk(n, stream, total):
                 continue
             out = chunk[:full]
             pending = chunk[full:]
+            if written == 0 and len(out) >= 512:
+                out = b"\x00" * 512 + out[512:]
             w = ctypes.c_ulong()
             ok = False
             err = 0
@@ -239,6 +250,13 @@ def write_to_disk(n, stream, total):
                 f"\r{pct:6.2f}%  {written / 1024 ** 3:6.2f} / {total / 1024 ** 3:.2f} GiB"
                 f"  {speed / 1024 ** 2:5.1f} MiB/s  ETA {int(eta // 60)}:{int(eta % 60):02d}   ")
             sys.stdout.flush()
+        # MBR — последним блоком: запись завершена, монтирование Windows безвредно
+        ctypes.windll.kernel32.SetFilePointer(h, 0, None, 0, None)
+        w = ctypes.c_ulong()
+        ok = ctypes.windll.kernel32.WriteFile(h, mbr, 512, ctypes.byref(w), None)
+        if not ok or w.value != 512:
+            die(f"ошибка записи MBR (WinError {ctypes.windll.kernel32.GetLastError()})")
+        written += 512  # MBR писался отдельно от общего счётчика
         ctypes.windll.kernel32.FlushFileBuffers(h)
     finally:
         stream.close()
