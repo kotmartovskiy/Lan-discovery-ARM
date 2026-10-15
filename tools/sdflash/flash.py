@@ -189,6 +189,17 @@ class _TarStream:
 
 
 def write_to_disk(n, stream, total):
+    # Двухпроходный MBR: Windows (volmgr) при появлении разделов в записываемом
+    # MBR примонтировывает их и блокирует дальнейшую сырую запись (WinError 5).
+    # Схема: (1) отрезать настоящий MBR из потока; (2) записать нулевые 512 байт
+    # (разделов нет — Windows не хватает диск); (3) писать остальные данные потока
+    # БЕЗ искажений со смещения 0+512; (4) в конце перезаписать MBR настоящим.
+    mbr = b""
+    while len(mbr) < 512:
+        piece = stream.read(512 - len(mbr))
+        if not piece:
+            die("образ короче 512 байт")
+        mbr += piece
     h = open_drive(n, write=True)
     if h is None:
         die(rf"не удалось открыть \\.\PhysicalDrive{n} "
@@ -196,16 +207,24 @@ def write_to_disk(n, stream, total):
     written = 0
     t0 = time.time()
     pending = b""
-    # Двухпроходный MBR: Windows (volmgr) при появлении разделов в записываемом
-    # MBR примонтировывает их и блокирует дальнейшую сырую запись (WinError 5).
-    # Пишем образ с нулевым MBR, реальный MBR — последним (уже после записи).
-    mbr = b""
-    while len(mbr) < 512:
-        piece = stream.read(512 - len(mbr))
-        if not piece:
-            die("образ короче 512 байт")
-        mbr += piece
+
+    def write_block(buf, what):
+        for attempt in range(4):
+            w = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.WriteFile(
+                h, buf, len(buf), ctypes.byref(w), None)
+            if ok and w.value == len(buf):
+                return
+            err = ctypes.windll.kernel32.GetLastError()
+            if attempt < 3:
+                time.sleep(1.0)
+        die(f"ошибка записи {what} на диске {n} (WinError {err}, "
+            f"попыток {attempt + 1})")
+
     try:
+        # (2) нулевой MBR-заглушка первым блоком — диск без разделов
+        write_block(b"\x00" * 512, "нулевой MBR-заглушки")
+        written = 512
         while True:
             data = stream.read(BUF)
             if not data:
@@ -223,23 +242,7 @@ def write_to_disk(n, stream, total):
                 continue
             out = chunk[:full]
             pending = chunk[full:]
-            if written == 0 and len(out) >= 512:
-                out = b"\x00" * 512 + out[512:]
-            w = ctypes.c_ulong()
-            ok = False
-            err = 0
-            for attempt in range(4):
-                w = ctypes.c_ulong()
-                ok = ctypes.windll.kernel32.WriteFile(
-                    h, out, len(out), ctypes.byref(w), None)
-                if ok and w.value == len(out):
-                    break
-                err = ctypes.windll.kernel32.GetLastError()
-                if attempt < 3:
-                    time.sleep(1.0)
-            if not ok or w.value != len(out):
-                die(f"ошибка записи на диске {n} (смещение {written}, "
-                    f"WinError {err}, попыток {attempt + 1})")
+            write_block(out, f"(смещение {written})")
             written += len(out)
             now = time.time()
             el = max(now - t0, 0.001)
@@ -250,13 +253,9 @@ def write_to_disk(n, stream, total):
                 f"\r{pct:6.2f}%  {written / 1024 ** 3:6.2f} / {total / 1024 ** 3:.2f} GiB"
                 f"  {speed / 1024 ** 2:5.1f} MiB/s  ETA {int(eta // 60)}:{int(eta % 60):02d}   ")
             sys.stdout.flush()
-        # MBR — последним блоком: запись завершена, монтирование Windows безвредно
-        ctypes.windll.kernel32.SetFilePointer(h, 0, None, 0, None)
-        w = ctypes.c_ulong()
-        ok = ctypes.windll.kernel32.WriteFile(h, mbr, 512, ctypes.byref(w), None)
-        if not ok or w.value != 512:
-            die(f"ошибка записи MBR (WinError {ctypes.windll.kernel32.GetLastError()})")
-        written += 512  # MBR писался отдельно от общего счётчика
+        # (4) настоящий MBR — последним: запись завершена, монтирование Windows безвредно
+        ctypes.windll.kernel32.SetFilePointerEx(h, ctypes.c_longlong(0), None, 0)
+        write_block(mbr, "MBR")
         ctypes.windll.kernel32.FlushFileBuffers(h)
     finally:
         stream.close()
@@ -267,6 +266,35 @@ def write_to_disk(n, stream, total):
     el = time.time() - t0
     print(f"[OK] Записано {written / 1024 ** 3:.2f} GiB за {int(el // 60)} мин "
           f"{int(el % 60)} сек на PhysicalDrive{n}")
+
+
+def prep_disk(n):
+    """Снять тома с диска и отключить авто-монтирование на время записи —
+    иначе volmgr перехватывает записываемые разделы и ломает запись (WinError 5)."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"Get-Partition -DiskNumber {n} -ErrorAction SilentlyContinue | "
+             f"Remove-Partition -Confirm:$false -ErrorAction SilentlyContinue"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, creationflags=0x08000000)
+    except Exception:
+        pass
+    try:
+        subprocess.run(["mountvol", "/N"], capture_output=True, timeout=10,
+                       creationflags=0x08000000)
+    except Exception:
+        pass
+
+
+def restore_mount():
+    import subprocess
+    try:
+        subprocess.run(["mountvol", "/E"], capture_output=True, timeout=10,
+                       creationflags=0x08000000)
+    except Exception:
+        pass
 
 
 def main():
@@ -335,7 +363,11 @@ def main():
 
     stream, total = source_stream(image)
     print(f"Запись{' (сжатый архив — распаковка на лету)' if image.lower().endswith('.xz') else ''}...")
-    write_to_disk(target, stream, total)
+    prep_disk(target)
+    try:
+        write_to_disk(target, stream, total)
+    finally:
+        restore_mount()
 
 
 if __name__ == "__main__":
