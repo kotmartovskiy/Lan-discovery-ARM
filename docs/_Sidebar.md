@@ -6,6 +6,7 @@
 - [Установка](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/Установка)
 - [Обновление](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/Обновление)
 - [Восстановление](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/Восстановление)
+- [Минимизация записей](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/Минимизация-записей)
 - [Архитектура](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/Архитектура)
 - [Модули и роуты](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/Модули)
 - [API](https://github.com/kotmartovskiy/Lan-discovery-ARM/wiki/API)
