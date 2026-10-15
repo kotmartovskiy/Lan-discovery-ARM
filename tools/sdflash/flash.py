@@ -62,8 +62,11 @@ def is_admin():
 def open_drive(n, write=True):
     path = rf"\\.\PhysicalDrive{n}"
     access = (GENERIC_READ | GENERIC_WRITE) if write else GENERIC_READ
+    # Запись — с запретом записи для остальных (share=READ): иначе volmgr
+    # подхватывает новые разделы из записываемого MBR и блокирует сырые записи.
+    share = FILE_SHARE_READ if write else (FILE_SHARE_READ | FILE_SHARE_WRITE)
     h = ctypes.windll.kernel32.CreateFileW(
-        path, access, FILE_SHARE_READ | FILE_SHARE_WRITE, None,
+        path, access, share, None,
         OPEN_EXISTING, 0, None,
     )
     if h == INVALID_HANDLE:
@@ -110,7 +113,8 @@ def get_model(n):
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
              f"(Get-Disk {n} -ErrorAction Stop).FriendlyName"],
-            capture_output=True, text=True, timeout=15, creationflags=0x08000000)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=15, creationflags=0x08000000)
         m = r.stdout.strip().splitlines()
         return m[0].strip() if m else None
     except Exception:
@@ -125,7 +129,8 @@ def is_system_disk(n):
             ["powershell", "-NoProfile", "-Command",
              f"(Get-Partition -DiskNumber {n} -ErrorAction Stop | "
              f"Where-Object DriveLetter).DriveLetter -contains 'C'"],
-            capture_output=True, text=True, timeout=15, creationflags=0x08000000)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=15, creationflags=0x08000000)
         return r.stdout.strip().lower() == "true"
     except Exception:
         return False
@@ -210,10 +215,20 @@ def write_to_disk(n, stream, total):
             out = chunk[:full]
             pending = chunk[full:]
             w = ctypes.c_ulong()
-            ok = ctypes.windll.kernel32.WriteFile(
-                h, out, len(out), ctypes.byref(w), None)
+            ok = False
+            err = 0
+            for attempt in range(4):
+                w = ctypes.c_ulong()
+                ok = ctypes.windll.kernel32.WriteFile(
+                    h, out, len(out), ctypes.byref(w), None)
+                if ok and w.value == len(out):
+                    break
+                err = ctypes.windll.kernel32.GetLastError()
+                if attempt < 3:
+                    time.sleep(1.0)
             if not ok or w.value != len(out):
-                die(f"ошибка записи на диске {n} (смещение {written})")
+                die(f"ошибка записи на диске {n} (смещение {written}, "
+                    f"WinError {err}, попыток {attempt + 1})")
             written += len(out)
             now = time.time()
             el = max(now - t0, 0.001)
